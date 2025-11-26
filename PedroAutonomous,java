@@ -1,0 +1,166 @@
+package org.firstinspires.ftc.teamcode.auto;
+
+import com.bylazar.configurables.annotations.Configurable;
+import com.bylazar.telemetry.PanelsTelemetry;
+import com.bylazar.telemetry.TelemetryManager;
+import com.pedropathing.follower.Follower;
+import com.pedropathing.geometry.BezierLine;
+import com.pedropathing.geometry.Pose;
+import com.pedropathing.paths.PathChain;
+import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.util.ElapsedTime;
+
+import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.subsystems.Intake;
+import org.firstinspires.ftc.teamcode.subsystems.Outtake;
+
+@Autonomous(name = "Pedro Pathing Autonomous", group = "Autonomous")
+@Configurable
+public class PedroAutonomous extends OpMode {
+
+    private TelemetryManager panelsTelemetry;
+    public Follower follower;
+    private int pathState;
+    private Paths paths;
+
+    //  Subsystems
+    private Intake intake;
+    private Outtake outtake;
+
+    //  Timer for rev-up delay
+    private ElapsedTime timer;
+    private boolean isRevving = false;
+
+    @Override
+    public void init() {
+        panelsTelemetry = PanelsTelemetry.INSTANCE.getTelemetry();
+
+        follower = Constants.createFollower(hardwareMap);
+        follower.setStartingPose(new Pose(72, 8, Math.toRadians(90)));
+
+        paths = new Paths(follower);
+
+        //  Initialize subsystems
+        intake = new Intake(hardwareMap);
+        outtake = new Outtake(hardwareMap);
+        timer = new ElapsedTime();
+
+        panelsTelemetry.debug("Status", "Initialized");
+        panelsTelemetry.update(telemetry);
+    }
+
+    @Override
+    public void loop() {
+        follower.update();
+        pathState = autonomousPathUpdate();
+
+        // Log values
+        panelsTelemetry.debug("Path State", pathState);
+        panelsTelemetry.debug("X", follower.getPose().getX());
+        panelsTelemetry.debug("Y", follower.getPose().getY());
+        panelsTelemetry.debug("Heading", follower.getPose().getHeading());
+        panelsTelemetry.debug("Intake Running", intake.getPower() > 0);
+        panelsTelemetry.debug("Shooter Top RPM", outtake.getTopRPM());
+        panelsTelemetry.debug("Shooter Bottom RPM", outtake.getBottomRPM());
+        if (isRevving) {
+            panelsTelemetry.debug("Rev Timer", String.format("%.1f / 3.0s", timer.seconds()));
+        }
+        panelsTelemetry.update(telemetry);
+    }
+
+    public static class Paths {
+        public PathChain Path1;
+        public PathChain Path2;
+        public PathChain Path3;
+        public PathChain Path4;
+
+        public Paths(Follower follower) {
+            Path1 = follower
+                    .pathBuilder()
+                    .addPath(new BezierLine(new Pose(56.000, 8.000), new Pose(56.034, 60.155)))
+                    .setLinearHeadingInterpolation(Math.toRadians(90), Math.toRadians(180))
+                    .build();
+
+            Path2 = follower
+                    .pathBuilder()
+                    .addPath(new BezierLine(new Pose(56.034, 60.155), new Pose(37.700, 59.948)))
+                    .setTangentHeadingInterpolation()
+                    .build();
+
+            Path3 = follower
+                    .pathBuilder()
+                    .addPath(new BezierLine(new Pose(37.700, 59.948), new Pose(19.777, 59.124)))
+                    .setTangentHeadingInterpolation()
+                    .build();
+
+            Path4 = follower
+                    .pathBuilder()
+                    .addPath(new BezierLine(new Pose(19.777, 59.124), new Pose(72.515, 106.094)))
+                    .setTangentHeadingInterpolation()
+                    .build();
+        }
+    }
+
+    public int autonomousPathUpdate() {
+        switch (pathState) {
+            case 0: // Start Path 1
+                follower.followPath(paths.Path1, true);
+                setPathState(1);
+                break;
+
+            case 1: // Wait for Path 1 to finish
+                if (!follower.isBusy()) {
+                    intake.start();
+                    follower.followPath(paths.Path2, true);
+                    setPathState(2);
+                }
+                break;
+
+            case 2: // Wait for Path 2 to finish
+                if (!follower.isBusy()) {
+                    intake.stop();
+                    follower.followPath(paths.Path3, true);
+                    setPathState(3);
+                }
+                break;
+
+            case 3: // Wait for Path 3 to finish
+                if (!follower.isBusy()) {
+                    follower.followPath(paths.Path4, true);
+                    setPathState(4);
+                }
+                break;
+
+            case 4: // End of Path 4 → stop everything before revving
+                if (!follower.isBusy()) {
+                    outtake.stop();   // stop both shooter motors
+                    intake.stop();    // stop intake
+                    timer.reset();
+                    isRevving = true;
+                    setPathState(5);
+                }
+                break;
+
+            case 5: // Rev-up both shooter motors + run intake
+                if (isRevving) {
+                    outtake.shoot();   // runs BOTH top + bottom motors
+                    intake.start();    // feed ball in
+                    if (timer.seconds() >= 3.0) {
+                        intake.stop(); // stop intake after 3s
+                        setPathState(6);
+                    }
+                }
+                break;
+
+            case 6: // Done
+                // Autonomous complete
+                break;
+        }
+        return pathState;
+    }
+
+    private void setPathState(int state) {
+        pathState = state;
+    }
+}
