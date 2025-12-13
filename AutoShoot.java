@@ -1,84 +1,82 @@
 package org.firstinspires.ftc.teamcode.commands;
 
+import com.qualcomm.hardware.limelightvision.LLResult;
+import org.firstinspires.ftc.teamcode.Alliance;
 import org.firstinspires.ftc.teamcode.LimeLight;
 import org.firstinspires.ftc.teamcode.Robot;
-import com.qualcomm.hardware.limelightvision.LLResult;
 import dev.nextftc.core.commands.Command;
-
-import java.util.function.BiConsumer;
+import com.pedropathing.geometry.Pose;
 
 public class AutoShoot extends Command {
-    private final Robot robot;
-    private boolean done = false;
 
-    // Hook for telemetry feedback
-    private BiConsumer<Double, Integer> telemetryHook;
+    private final Robot robot;
+
+
+    private static final double TURRET_KP = 0.015; // Proportional gain for turret centering
+    private static final double MAX_TURRET_RANGE = 90.0; // Degrees the turret can turn left/right
+
+    // State variables
+    private int shotsFired = 0;
+    private long lastShotTime = 0;
 
     public AutoShoot(Robot robot) {
         this.robot = robot;
         setInterruptible(true);
+        addRequirements(robot.outtake);
     }
 
     @Override
     public void start() {
-        done = false;
+        shotsFired = 0;
+        robot.outtake.shooterStart(); // Spin up flywheel
     }
 
     @Override
     public void update() {
         LLResult result = LimeLight.getLatestResult();
+
+        // 1. Target Validation
+        boolean validTarget = false;
         if (result != null && result.isValid()) {
-            double ty = result.getTy(); // vertical offset from Limelight
-            double distance = calculateDistance(ty);
+            // need to add ID check here if specific tags matter (like Blue vs Red)
+            validTarget = true;
+        }
 
-            // Map distance to RPM
-            int targetRPM = getTargetRPM(distance);
+        // 2. Aiming Logic (Turret)
+        if (validTarget) {
+            double tx = result.getTx();
 
-            // Spin shooter motors at target RPM
-            robot.outtake.topMotor.setVelocity(targetRPM);
-            robot.outtake.bottomMotor.setVelocity(targetRPM);
+            // Calculate new turret angle relative to current
+            // If tx is +10 deg (target is right), we need to add 10 deg to current turret angle
+            double currentTurretAngle = robot.outtake.getTurretAngle();
+            double targetTurretAngle = currentTurretAngle - tx;
 
-            // Telemetry feedback
-            if (telemetryHook != null) {
-                telemetryHook.accept(distance, targetRPM);
-            }
+            robot.outtake.setTurretAngle(targetTurretAngle);
 
-            // If shooter is at speed, feed ball
-            if (robot.outtake.getTopRPM() >= targetRPM - 50) {
-                robot.intake.startCommand.schedule();
-                done = true;
-            }
+        } else {
+           //If no target, center the turret
+            robot.outtake.setTurretAngle(0);
+        }
+
+
+        boolean isAimed = validTarget && Math.abs(result.getTx()) < 2.0;
+        boolean isReady = robot.outtake.isFlywheelReady();
+
+        if (isAimed && isReady && (System.currentTimeMillis() - lastShotTime > 500)) {
+            robot.outtake.feedRing(); // Push ring into flywheel
+            lastShotTime = System.currentTimeMillis();
+            shotsFired++;
         }
     }
 
     @Override
     public boolean isDone() {
-        return done;
+        // stops after 3 shots or if button released
+        return shotsFired >= 3;
     }
 
-    @Override
-    public void stop(boolean interrupted) {
-        robot.intake.stopCommand.schedule();
-        robot.outtake.stop.schedule();
-    }
-
-    /** Allow Robot.java to hook telemetry values */
-    public void setTelemetryHook(BiConsumer<Double, Integer> hook) {
-        this.telemetryHook = hook;
-    }
-
-    /** Distance calculation from Limelight vertical offset */
-    private double calculateDistance(double ty) {
-        double cameraHeight = 12;   // inches (adjust to your robot)
-        double targetHeight = 36;   // inches (goalpost height)
-        double cameraAngle = Math.toRadians(25); // degrees (adjust to your mount)
-        return (targetHeight - cameraHeight) / Math.tan(cameraAngle + Math.toRadians(ty));
-    }
-
-    /** Map distance to RPM (tune experimentally) */
-    private int getTargetRPM(double distance) {
-        if (distance < 24) return 1000;
-        else if (distance < 36) return 1200;
-        else return 1400;
+    public void end(boolean interrupted) {
+        robot.outtake.shooterStop();
+        robot.outtake.setTurretAngle(0); // Recenter turret when completed
     }
 }
