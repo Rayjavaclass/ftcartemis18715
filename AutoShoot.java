@@ -1,82 +1,95 @@
 package org.firstinspires.ftc.teamcode.commands;
 
 import com.qualcomm.hardware.limelightvision.LLResult;
-import org.firstinspires.ftc.teamcode.Alliance;
+import dev.nextftc.core.commands.Command;import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.teamcode.LimeLight;
 import org.firstinspires.ftc.teamcode.Robot;
-import dev.nextftc.core.commands.Command;
-import com.pedropathing.geometry.Pose;
 
 public class AutoShoot extends Command {
 
     private final Robot robot;
+    private final ElapsedTime timer = new ElapsedTime();
 
+    // --- TUNING CONSTANTS ---
+    private static final double TURRET_TOLERANCE_DEGREES = 2.0;
+    private static final double FEED_EXTENSION_TIME = 0.25;
+    private static final double FEED_RETRACT_TIME = 0.25;
 
-    private static final double TURRET_KP = 0.015; // Proportional gain for turret centering
-    private static final double MAX_TURRET_RANGE = 90.0; // Degrees the turret can turn left/right
+    // --- STATE MACHINE ---
+    private enum ShootState {
+        AIMING,
+        FEEDING,
+        RESETTING
+    }
 
-    // State variables
-    private int shotsFired = 0;
-    private long lastShotTime = 0;
+    private ShootState currentState = ShootState.AIMING;
 
     public AutoShoot(Robot robot) {
         this.robot = robot;
-        setInterruptible(true);
         addRequirements(robot.outtake);
     }
 
     @Override
     public void start() {
-        shotsFired = 0;
-        robot.outtake.shooterStart(); // Spin up flywheel
+        // Start the flywheels immediately when command starts
+        robot.outtake.shooterStart();
+        currentState = ShootState.AIMING;
     }
 
     @Override
     public void update() {
+        // 1. Get Vision Data
         LLResult result = LimeLight.getLatestResult();
 
-        // 1. Target Validation
-        boolean validTarget = false;
-        if (result != null && result.isValid()) {
-            // need to add ID check here if specific tags matter (like Blue vs Red)
-            validTarget = true;
-        }
+        // 2. Aim Turret
+        boolean isAimed = false;
 
-        // 2. Aiming Logic (Turret)
-        if (validTarget) {
+        if (result != null && result.isValid()) {
             double tx = result.getTx();
 
-            // Calculate new turret angle relative to current
-            // If tx is +10 deg (target is right), we need to add 10 deg to current turret angle
-            double currentTurretAngle = robot.outtake.getTurretAngle();
-            double targetTurretAngle = currentTurretAngle - tx;
+            double currentAngle = robot.outtake.getTurretAngle();
+            double targetAngle = currentAngle - tx;
 
-            robot.outtake.setTurretAngle(targetTurretAngle);
+            robot.outtake.setTurretAngle(targetAngle);
 
-        } else {
-           //If no target, center the turret
-            robot.outtake.setTurretAngle(0);
+            isAimed = Math.abs(tx) < TURRET_TOLERANCE_DEGREES;
         }
 
+        // 3. Handle State Machine
+        switch (currentState) {
+            case AIMING:
+                if (isAimed && robot.outtake.isFlywheelReady()) {
+                    robot.outtake.feedRing();
+                    timer.reset();
+                    currentState = ShootState.FEEDING;
+                }
+                break;
 
-        boolean isAimed = validTarget && Math.abs(result.getTx()) < 2.0;
-        boolean isReady = robot.outtake.isFlywheelReady();
+            case FEEDING:
+                if (timer.seconds() > FEED_EXTENSION_TIME) {
+                    robot.outtake.feedServo.setPosition(0.0);
+                    timer.reset();
+                    currentState = ShootState.RESETTING;
+                }
+                break;
 
-        if (isAimed && isReady && (System.currentTimeMillis() - lastShotTime > 500)) {
-            robot.outtake.feedRing(); // Push ring into flywheel
-            lastShotTime = System.currentTimeMillis();
-            shotsFired++;
+            case RESETTING:
+                if (timer.seconds() > FEED_RETRACT_TIME) {
+                    currentState = ShootState.AIMING;
+                }
+                break;
         }
     }
 
     @Override
-    public boolean isDone() {
-        // stops after 3 shots or if button released
-        return shotsFired >= 3;
+    public void stop(boolean interrupted) {
+        robot.outtake.shooterStop();
+        robot.outtake.feedServo.setPosition(0.0);
     }
 
-    public void end(boolean interrupted) {
-        robot.outtake.shooterStop();
-        robot.outtake.setTurretAngle(0); // Recenter turret when completed
+    @Override
+    public boolean isDone() {
+        // Returns false so the command runs continuously while the button is held
+        return false;
     }
 }
