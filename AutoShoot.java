@@ -59,7 +59,7 @@ public class AutoShoot extends Command {
         switch (currentState) {
             case AIMING:
                 if (isAimed && robot.outtake.isFlywheelReady()) {
-                    robot.outtake.feedRing();
+                    robot.outtake.feedBall();
                     timer.reset();
                     currentState = ShootState.FEEDING;
                 }
