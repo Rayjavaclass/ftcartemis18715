@@ -101,7 +101,7 @@ public class Outtake implements Subsystem {
         return topMotor.getPower() > 0.5 && bottomOuttakeMotor.getPower() > 0.5;
     }
 
-    public void feedRing() {
+    public void feedBall() {
         feedServo.setPosition(1.0); // Push
         // Note: You need logic to retract this (0.0) after a split second
     }
